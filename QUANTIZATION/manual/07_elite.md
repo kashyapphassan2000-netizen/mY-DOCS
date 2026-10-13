@@ -32,7 +32,14 @@ source $QLAB/envs/quant/bin/activate && python $S/elite_lab.py --model Qwen/Qwen
 
 YOU SHOULD SEE a table like this one (REAL output from the test run on HuggingFaceTB/SmolLM2-135M-Instruct on CPU, group size 64, 32 calibration samples; your numbers will differ):
 
-ELITE_RESULTS_PLACEHOLDER
+```
+recipe                      KL(orig||quant)  top-1 agree
+RTN W4A16                           0.32930        0.745
+GPTQ W4A16                          0.26292        0.772
+QuIP + GPTQ W4A16                   0.09145        0.868
+GPTQ W8A8                           0.02293        0.924
+SmoothQuant + GPTQ W8A8             0.01114        0.951
+```
 
 How to read it: KL(orig||quant) = how far the quantized model's next-token probabilities moved from the original (lower = better); top-1 agree = how often both pick the same next token (higher = better). Read the rows top to bottom: GPTQ's error compensation beats plain rounding (RTN); a Hadamard rotation (QuIP) spreads outlier channels before rounding; for INT8 activations, SmoothQuant moves activation outliers into the weights first. Tiny models with tiny calibration sets exaggerate the differences: the ranking is the lesson, not the size of the gain.
 
