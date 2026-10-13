@@ -1,0 +1,57 @@
+# CANARY: one pod with the NEW model version behind the same Service.
+# The Service sends traffic to every pod with app=vllm, so 1 canary next to 9 stable pods ~ 10% of users.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-canary
+  namespace: llm
+  labels: { app: vllm }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: vllm, track: canary }
+  template:
+    metadata:
+      labels: { app: vllm, track: canary }
+    spec:
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+      nodeSelector:
+        workload: llm-gpu
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.29.0
+          args:
+            - --model=HF_REPO
+            - --revision=NEW_TAG                 # e.g. v2
+            - --served-model-name=SERVED_NAME    # SAME name: clients do not change anything
+            - --max-model-len=8192
+            - --gpu-memory-utilization=0.90
+            - --max-num-seqs=64
+            - --api-key=$(VLLM_API_KEY)
+            - --port=8000
+          env:
+            - name: HF_TOKEN
+              valueFrom: { secretKeyRef: { name: llm-secrets, key: HF_TOKEN } }
+            - name: VLLM_API_KEY
+              valueFrom: { secretKeyRef: { name: llm-secrets, key: VLLM_API_KEY } }
+          ports:
+            - { name: http, containerPort: 8000 }
+          resources:
+            limits: { nvidia.com/gpu: 1 }
+            requests: { cpu: "3", memory: 24Gi }
+          startupProbe:
+            httpGet: { path: /health, port: 8000 }
+            periodSeconds: 10
+            failureThreshold: 90
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            periodSeconds: 10
+          volumeMounts:
+            - { name: hf-cache, mountPath: /root/.cache/huggingface }
+            - { name: shm, mountPath: /dev/shm }
+      volumes:
+        - name: hf-cache
+          emptyDir: {}
+        - name: shm
+          emptyDir: { medium: Memory, sizeLimit: 8Gi }

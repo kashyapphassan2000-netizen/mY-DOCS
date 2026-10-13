@@ -1,0 +1,91 @@
+# vLLM serving your quantized model from Hugging Face. One pod = one GPU machine.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llm
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  namespace: llm
+  labels: { app: vllm }
+spec:
+  replicas: 1                      # KEDA owns this number after scaledobject.yaml is applied
+  selector:
+    matchLabels: { app: vllm, track: stable }   # canary pods (track: canary) are NOT owned by this Deployment
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }   # never drop capacity during an update
+  template:
+    metadata:
+      labels: { app: vllm, track: stable }
+    spec:
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+      nodeSelector:
+        workload: llm-gpu
+      terminationGracePeriodSeconds: 120                # let running answers finish
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.29.0
+          args:
+            - --model=HF_REPO                    # e.g. karthik-ai/qwen3-8b-gptq-w4a16
+            - --revision=MODEL_TAG               # e.g. v1  (the Hub tag = your model version)
+            - --served-model-name=SERVED_NAME    # e.g. qwen3-8b
+            - --max-model-len=8192
+            - --gpu-memory-utilization=0.90
+            - --max-num-seqs=64
+            - --api-key=$(VLLM_API_KEY)
+            - --port=8000
+          env:
+            - name: HF_TOKEN
+              valueFrom: { secretKeyRef: { name: llm-secrets, key: HF_TOKEN } }
+            - name: VLLM_API_KEY
+              valueFrom: { secretKeyRef: { name: llm-secrets, key: VLLM_API_KEY } }
+          ports:
+            - { name: http, containerPort: 8000 }
+          resources:
+            limits: { nvidia.com/gpu: 1 }        # = tensor-parallel size; 4 for a 4-GPU machine
+            requests: { cpu: "3", memory: 24Gi }
+          startupProbe:                          # model download + load can take 10+ minutes
+            httpGet: { path: /health, port: 8000 }
+            periodSeconds: 10
+            failureThreshold: 90
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            periodSeconds: 10
+          volumeMounts:
+            - { name: hf-cache, mountPath: /root/.cache/huggingface }
+            - { name: shm, mountPath: /dev/shm }
+      volumes:
+        - name: hf-cache
+          emptyDir: {}
+        - name: shm                              # shared memory for tensor parallel > 1
+          emptyDir: { medium: Memory, sizeLimit: 8Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm
+  namespace: llm
+  labels: { app: vllm }
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+spec:
+  type: LoadBalancer                             # public endpoint; put your API gateway in front for users
+  selector: { app: vllm }
+  ports:
+    - { name: http, port: 80, targetPort: 8000 }
+---
+# Tell Prometheus to scrape vLLM's /metrics from every pod
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: vllm
+  namespace: llm
+spec:
+  selector:
+    matchLabels: { app: vllm }
+  podMetricsEndpoints:
+    - { port: http, path: /metrics, interval: 15s }

@@ -1,0 +1,47 @@
+# YOUR RULE: add a GPU machine when memory pressure reaches ~78-80%, remove one when it falls below ~60%,
+# never fewer than 1, never more than 50.
+#
+# "Memory pressure" = vllm:kv_cache_usage_perc (0.0-1.0): how full the GPU memory that vLLM reserved for
+# users' conversations is. Raw VRAM % is useless here: vLLM grabs 90% of VRAM at startup, so nvidia-smi
+# shows ~90% even with zero users.
+#
+# Kubernetes math (HPA): desired = ceil(current_pods x metric / target). It ignores changes within +-10%
+# of the target. target 0.70 -> no action between 0.63 and 0.77; scale OUT above ~0.77; scale IN below ~0.63.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: vllm-autoscaler
+  namespace: llm
+spec:
+  scaleTargetRef:
+    name: vllm
+  minReplicaCount: 1
+  maxReplicaCount: 50
+  pollingInterval: 15                    # seconds between metric checks
+  cooldownPeriod: 300
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 60
+          policies:
+            - { type: Pods, value: 2, periodSeconds: 180 }   # at most +2 pods per 3 min (cold starts are slow)
+        scaleDown:
+          stabilizationWindowSeconds: 600                    # load must stay low for 10 min
+          policies:
+            - { type: Pods, value: 1, periodSeconds: 300 }   # remove at most 1 pod per 5 min
+  triggers:
+    # Trigger 1: your 60-80% memory band
+    - type: prometheus
+      metricType: Value
+      metadata:
+        serverAddress: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+        query: avg(vllm:kv_cache_usage_perc{namespace="llm"})
+        threshold: "0.70"
+    # Trigger 2 (enterprise safety net): users waiting in the queue. Target 5 waiting per pod.
+    - type: prometheus
+      metricType: AverageValue
+      metadata:
+        serverAddress: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+        query: sum(vllm:num_requests_waiting{namespace="llm"})
+        threshold: "5"
