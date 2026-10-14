@@ -16,10 +16,11 @@ import re
 import httpx
 
 
-def answer(url: str, model: str, key: str, prompt: str, max_tokens: int) -> str:
+def answer(url: str, model: str, key: str, prompt: str, max_tokens: int, system: str | None = None) -> str:
+    msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
     r = httpx.post(f"{url.rstrip('/')}/v1/chat/completions",
                    headers={"Authorization": f"Bearer {key}"} if key else {},
-                   json={"model": model, "messages": [{"role": "user", "content": prompt}],
+                   json={"model": model, "messages": msgs,
                          "temperature": 0.0, "max_tokens": max_tokens}, timeout=600)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"] or ""
@@ -34,6 +35,9 @@ def main() -> None:
     ap.add_argument("--key-env", default="VLLM_API_KEY")
     ap.add_argument("--max-tokens", type=int, default=1024)
     ap.add_argument("--workers", type=int, default=16)
+    ap.add_argument("--system", default=None,
+                    help="system prompt used ONLY while generating (not saved): the adapter learns to behave "
+                         "this way without being told, e.g. 'Answer only in valid JSON.'")
     ap.add_argument("--keep-think", action="store_true",
                     help="keep <think>...</think> reasoning (default: train on the final answer only)")
     a = ap.parse_args()
@@ -41,7 +45,7 @@ def main() -> None:
     key = os.environ.get(a.key_env, "")
     prompts = [json.loads(l)["prompt"] for l in open(a.prompts, encoding="utf-8") if l.strip()]
     with cf.ThreadPoolExecutor(a.workers) as ex:
-        answers = list(ex.map(lambda p: answer(a.url, a.model, key, p, a.max_tokens), prompts))
+        answers = list(ex.map(lambda p: answer(a.url, a.model, key, p, a.max_tokens, a.system), prompts))
     if not a.keep_think:
         answers = [re.sub(r"<think>.*?</think>", "", t, flags=re.S).strip() for t in answers]
     with open(a.out, "w", encoding="utf-8") as f:

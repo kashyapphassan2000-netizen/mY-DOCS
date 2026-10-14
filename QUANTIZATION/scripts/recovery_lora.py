@@ -7,6 +7,8 @@ How it works:
   3. You SERVE the original quantized checkpoint + this adapter (vLLM --enable-lora). Memory cost: tiny.
 Because the frozen weights are exactly the values the quantized GPU kernels use, what you train is what you serve.
 
+Also trains ordinary task/style adapters on a plain 16-bit base: use --base instead of --quantized.
+
 Input data: teacher.jsonl from teacher_answers.py.
 Run:
   python recovery_lora.py --quantized ~/work/qwen3-8b/gptq --data data/teacher.jsonl \
@@ -40,7 +42,9 @@ def encode(tok, messages: list[dict], max_len: int) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--quantized", required=True, help="llm-compressor folder (gptq/awq/fp8/w8a8)")
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--quantized", help="llm-compressor folder (gptq/awq/fp8/w8a8): recovery adapter")
+    src.add_argument("--base", help="plain 16-bit model (HF id or folder): normal task/style adapter")
     ap.add_argument("--data", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--rank", type=int, default=16)
@@ -51,13 +55,14 @@ def main() -> None:
     ap.add_argument("--max-len", type=int, default=2048)
     a = ap.parse_args()
 
-    qdir = os.path.expanduser(a.quantized)
+    qdir = os.path.expanduser(a.quantized or a.base)
     tok = AutoTokenizer.from_pretrained(qdir)
+    extra = {"quantization_config": CompressedTensorsConfig(run_compressed=False)} if a.quantized else {}
     model = AutoModelForCausalLM.from_pretrained(
-        qdir, dtype=torch.bfloat16, device_map="auto" if torch.cuda.is_available() else None,
-        quantization_config=CompressedTensorsConfig(run_compressed=False))
-    model.hf_quantizer = None          # weights are now plain (frozen) bf16 values of W_q
-    model.is_quantized = False
+        qdir, dtype=torch.bfloat16, device_map="auto" if torch.cuda.is_available() else None, **extra)
+    if a.quantized:
+        model.hf_quantizer = None      # weights are now plain (frozen) bf16 values of W_q
+        model.is_quantized = False
     model.gradient_checkpointing_enable()
     model.enable_input_require_grads()
     model = get_peft_model(model, LoraConfig(r=a.rank, lora_alpha=a.alpha, lora_dropout=0.05,
@@ -92,7 +97,7 @@ def main() -> None:
     out = os.path.expanduser(a.out)
     model.save_pretrained(out)
     tok.save_pretrained(out)
-    print(f"recovery adapter saved to {out}")
+    print(f"LoRA adapter saved to {out}")
 
 
 if __name__ == "__main__":

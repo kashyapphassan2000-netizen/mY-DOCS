@@ -78,6 +78,7 @@ LLM quantization stores a language model's weights (the numbers it learned in tr
 | 4 Basics | Size a real model, baseline, FP8, serve, first comparison | 2-3 h |
 | 5 Intermediate | Calibration, GPTQ/AWQ/W8A8/NF4/GGUF, full evaluation, tuning sweep, push to HF | 4-6 h |
 | 6 Advanced | Serve from HF on fresh GPUs, Terraform EKS, Kubernetes, autoscaling to 50 | 4-6 h |
+| 6B Engines | Multi-LoRA on vLLM and SGLang, RadixAttention vs PagedAttention, speculative decoding lab, GGML vs GGUF internals | 4-6 h |
 | 7 Elite | Rotations/SmoothQuant lab, what-changed analysis, accuracy recovery, trillion-scale, update flow | 4-8 h |
 | 8-14 | Tools map, maintenance, troubleshooting, projects, cheat sheet, self-test, sources | reference |
 

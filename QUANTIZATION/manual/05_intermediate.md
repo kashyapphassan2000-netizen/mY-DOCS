@@ -60,7 +60,7 @@ From now on use `$QLAB/work/SLUG/merged` wherever this manual says MODEL_ID (it 
 
 **Explained:** `merge_and_unload()` computes W_new = W + (B x A) x scale for every adapted layer and removes the adapter, so the quantizer calibrates the weights you actually serve. The script compares the model's outputs with and without merging; a big difference means the adapter was trained on a different base.
 
-WATCH OUT: The adapter MUST be trained on this exact base. Merge into the 16-bit base, never into a 4-bit model. Several adapters? Do not merge: serve them unmerged (Part 6, multi-LoRA).
+WATCH OUT: The adapter MUST be trained on this exact base. Merge into the 16-bit base, never into a 4-bit model. Several adapters? Do not merge: serve them unmerged (Part 6B.3, multi-LoRA).
 
 CHECKPOINT: logit diff < 1e-2; merged/config.json exists.
 

@@ -36,8 +36,20 @@ def pct(xs: list[float], p: float) -> float:
     return xs[min(len(xs) - 1, int(round(p / 100 * (len(xs) - 1))))]
 
 
-async def one(client: httpx.AsyncClient, url: str, key: str, model: str, prompt: str, max_tokens: int) -> dict:
-    body = {"model": model, "messages": [{"role": "user", "content": prompt}], "max_tokens": max_tokens,
+def shared_prefix(words: int) -> str:
+    """A long system prompt that EVERY request shares (like a RAG/agent instruction block): tests prefix caching."""
+    base = ("You are the support assistant of Example Corp. Follow the policy handbook exactly. "
+            "Section {i}: answers must be polite, accurate, cite the handbook section, and never invent facts. ")
+    out, i = [], 0
+    while sum(len(x.split()) for x in out) < words:
+        out.append(base.format(i=i)); i += 1
+    return "".join(out)
+
+
+async def one(client: httpx.AsyncClient, url: str, key: str, model: str, prompt: str, max_tokens: int,
+              system: str | None = None) -> dict:
+    msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
+    body = {"model": model, "messages": msgs, "max_tokens": max_tokens,
             "temperature": 0.0, "stream": True, "stream_options": {"include_usage": True}}
     headers = {"Authorization": f"Bearer {key}"} if key else {}
     t0 = time.perf_counter()
@@ -69,12 +81,12 @@ async def one(client: httpx.AsyncClient, url: str, key: str, model: str, prompt:
     return {"ok": True, "ttft": first - t0, "gaps": gaps, "tokens": tokens, "total": time.perf_counter() - t0}
 
 
-async def level(url, key, model, prompts, conc, max_tokens) -> dict:
+async def level(url, key, model, prompts, conc, max_tokens, system=None) -> dict:
     sem = asyncio.Semaphore(conc)
     async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0)) as client:
         async def run(p):
             async with sem:
-                return await one(client, url, key, model, p, max_tokens)
+                return await one(client, url, key, model, p, max_tokens, system)
         t0 = time.perf_counter()
         res = await asyncio.gather(*(run(p) for p in prompts))
         wall = time.perf_counter() - t0
@@ -97,6 +109,8 @@ def main() -> None:
     ap.add_argument("--num-prompts", type=int, default=64)
     ap.add_argument("--max-tokens", type=int, default=256)
     ap.add_argument("--key-env", default="VLLM_API_KEY", help="env var holding the API key")
+    ap.add_argument("--shared-prefix-words", type=int, default=0,
+                    help="add a shared system prompt of ~N words to every request (prefix-caching test)")
     ap.add_argument("--out", default="bench_results.jsonl")
     a = ap.parse_args()
 
@@ -105,7 +119,8 @@ def main() -> None:
     print(f"| label | conc | tok/s | TTFT p50 ms | TTFT p95 ms | ITL p50 ms | failed |")
     print(f"|---|---|---|---|---|---|---|")
     for c in a.concurrency:
-        r = asyncio.run(level(a.url.rstrip("/"), key, a.model, prompts, c, a.max_tokens))
+        system = shared_prefix(a.shared_prefix_words) if a.shared_prefix_words else None
+        r = asyncio.run(level(a.url.rstrip("/"), key, a.model, prompts, c, a.max_tokens, system))
         r["label"] = a.label
         print(f"| {a.label} | {c} | {r['tok_per_s']} | {r['ttft_p50_ms']} | {r['ttft_p95_ms']} | "
               f"{r['itl_p50_ms']} | {r['failed']} |", flush=True)
